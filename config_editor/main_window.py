@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,6 +38,7 @@ from .storage import (
     LoadedProfile,
     Profile,
     SettingsError,
+    discover_settings_files,
     load_profile_registry,
     load_settings,
     new_profile,
@@ -49,6 +50,12 @@ from .storage import (
 DEFAULT_BAR = "#4A9EFF"
 DEFAULT_LIGHT = "#FFFFFF"
 DEFAULT_DARK = "#000000"
+KNOWN_PROFILE_LABELS = {
+    ".claude": "Claude",
+    ".claude-valeria": "Claude Valeria",
+    ".codex": "Codex",
+    ".copilot": "Copilot",
+}
 
 
 def color_from_rgba(value: Any, fallback: str) -> str:
@@ -155,6 +162,7 @@ class MainWindow(QMainWindow):
             self.profile_list.setCurrentRow(0)
         else:
             self._clear_editor()
+            QTimer.singleShot(0, self._maybe_offer_discovery)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -180,6 +188,10 @@ class MainWindow(QMainWindow):
         profile_actions.addWidget(self.add_profile_button)
         profile_actions.addWidget(self.remove_profile_button)
         left_layout.addLayout(profile_actions)
+        self.discover_button = QPushButton("Rileva configurazioni")
+        self.discover_button.setToolTip("Cerca automaticamente i file usage-monitor-settings.json nelle cartelle standard")
+        self.discover_button.clicked.connect(self._discover_profiles)
+        left_layout.addWidget(self.discover_button)
         self.path_label = QLabel()
         self.path_label.setWordWrap(True)
         self.path_label.setStyleSheet("color: #777777;")
@@ -320,6 +332,82 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Nessun profilo caricato")
         self._set_editor_enabled(False)
 
+    def _maybe_offer_discovery(self) -> None:
+        if self.profiles:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Nessuna configurazione caricata",
+            "Non ci sono profili configurati. Vuoi rilevare automaticamente "
+            "i file usage-monitor-settings.json presenti nelle cartelle standard?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._discover_profiles()
+
+    @staticmethod
+    def _suggested_label(path: Path) -> str:
+        folder_name = path.parent.name
+        if folder_name.casefold() in KNOWN_PROFILE_LABELS:
+            return KNOWN_PROFILE_LABELS[folder_name.casefold()]
+        label = folder_name.lstrip(".").replace("-", " ").replace("_", " ").strip()
+        return label.title() if label else path.stem
+
+    def _register_profiles(self, profiles: list[Profile]) -> list[Profile]:
+        existing_paths = {profile.path.resolve() for profile in self.profiles}
+        accepted: list[Profile] = []
+        for profile in profiles:
+            resolved = profile.path.resolve()
+            if resolved not in existing_paths:
+                accepted.append(profile)
+                existing_paths.add(resolved)
+        if not accepted:
+            return []
+
+        combined = self.profiles + accepted
+        save_profile_registry(combined)
+        self.profiles = combined
+        for profile in accepted:
+            loaded = load_settings(profile)
+            self.loaded[profile.key] = loaded
+            item = QListWidgetItem(profile.label)
+            item.setData(Qt.UserRole, profile.key)
+            self.profile_list.addItem(item)
+            self._refresh_item(item, loaded)
+        return accepted
+
+    def _discover_profiles(self) -> None:
+        paths = discover_settings_files()
+        new_profiles = [new_profile(self._suggested_label(path), path) for path in paths]
+        try:
+            added = self._register_profiles(new_profiles)
+        except OSError as exc:
+            QMessageBox.critical(self, "Rilevamento non riuscito", str(exc))
+            return
+
+        if not paths:
+            QMessageBox.information(
+                self,
+                "Nessuna configurazione trovata",
+                "Non ho trovato file usage-monitor-settings.json nelle cartelle standard.",
+            )
+            return
+        if not added:
+            QMessageBox.information(
+                self,
+                "Configurazioni già presenti",
+                "Le configurazioni trovate sono già presenti nell'elenco.",
+            )
+            return
+
+        self.profile_list.setCurrentRow(self.profile_list.count() - len(added))
+        QMessageBox.information(
+            self,
+            "Configurazioni rilevate",
+            f"Ho aggiunto {len(added)} configurazioni all'elenco.",
+        )
+
     def _add_profile(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
             self,
@@ -335,7 +423,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Profilo già presente", "Questo file è già nell'elenco dei profili.")
             return
 
-        default_label = path.parent.name.lstrip(".").replace("-", " ").replace("_", " ").title()
+        default_label = self._suggested_label(path)
         label, accepted = QInputDialog.getText(
             self,
             "Nome profilo",
@@ -347,19 +435,12 @@ class MainWindow(QMainWindow):
 
         profile = new_profile(label.strip(), path)
         try:
-            save_profile_registry(self.profiles + [profile])
+            added = self._register_profiles([profile])
         except OSError as exc:
             QMessageBox.critical(self, "Profilo non aggiunto", str(exc))
             return
-
-        self.profiles.append(profile)
-        loaded = load_settings(profile)
-        self.loaded[profile.key] = loaded
-        item = QListWidgetItem(profile.label)
-        item.setData(Qt.UserRole, profile.key)
-        self.profile_list.addItem(item)
-        self._refresh_item(item, loaded)
-        self.profile_list.setCurrentItem(item)
+        if added:
+            self.profile_list.setCurrentRow(self.profile_list.count() - 1)
 
     def _remove_profile(self) -> None:
         if not self.current_key:

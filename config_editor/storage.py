@@ -12,6 +12,9 @@ from typing import Any
 import uuid
 
 
+SETTINGS_FILENAME = "usage-monitor-settings.json"
+
+
 class SettingsError(Exception):
     """Raised when a settings file cannot be read or validated."""
 
@@ -48,6 +51,42 @@ def default_profiles(home: Path | None = None) -> list[Profile]:
         Profile("codex", "Codex", home / ".codex" / "usage-monitor-settings.json"),
         Profile("copilot", "Copilot", home / ".copilot" / "usage-monitor-settings.json"),
     ]
+
+
+def discover_settings_files(roots: list[Path] | None = None) -> list[Path]:
+    """Find likely monitor settings files without scanning the whole disk.
+
+    The discovery checks each supplied root itself and its immediate child
+    directories. This covers dot-directories such as ``.claude`` and common
+    application-data folders while keeping startup predictable and safe.
+    """
+    if roots is None:
+        home = Path.home()
+        roots = [
+            home,
+            Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local")),
+            Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")),
+        ]
+
+    discovered: dict[str, Path] = {}
+    for root in roots:
+        root = root.expanduser()
+        if not root.is_dir():
+            continue
+        candidates = [root / SETTINGS_FILENAME]
+        try:
+            candidates.extend(child / SETTINGS_FILENAME for child in root.iterdir() if child.is_dir())
+        except OSError:
+            continue
+        for candidate in candidates:
+            if candidate.is_file():
+                try:
+                    resolved = candidate.resolve()
+                except OSError:
+                    resolved = candidate
+                discovered[str(resolved).casefold()] = resolved
+
+    return sorted(discovered.values(), key=lambda item: str(item).casefold())
 
 
 def profile_registry_path() -> Path:

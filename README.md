@@ -23,6 +23,8 @@ It provides:
 - Visual color editing for the popup bar and tray icon themes.
 - Quick action command editing and an explicit test button.
 - Selectable profile list with persistent local history.
+- Automatic discovery of `usage-monitor-settings.json` files in standard user
+  and application-data folders.
 - Read-only JSON preview that preserves settings the editor does not manage.
 - Atomic saves and a `.bak` backup of the previous file.
 - Support for profiles that do not exist yet.

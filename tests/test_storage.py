@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from config_editor.storage import (
     Profile,
+    discover_settings_files,
     load_profile_registry,
     load_settings,
     new_profile,
@@ -18,6 +19,20 @@ from config_editor.storage import (
 
 
 class StorageTests(unittest.TestCase):
+    def test_discovers_settings_in_root_and_child_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".claude").mkdir()
+            (root / ".codex").mkdir()
+            (root / ".claude" / "usage-monitor-settings.json").write_text("{}")
+            (root / ".codex" / "usage-monitor-settings.json").write_text("{}")
+            (root / "usage-monitor-settings.json").write_text("{}")
+
+            found = discover_settings_files([root])
+
+            self.assertEqual(len(found), 3)
+            self.assertEqual({path.parent.name for path in found}, {root.name, ".claude", ".codex"})
+
     def test_missing_profile_is_reported_without_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = Profile("test", "Test", Path(directory) / "missing" / "usage-monitor-settings.json")
