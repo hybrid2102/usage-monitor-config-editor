@@ -308,6 +308,7 @@ class MainWindow(QMainWindow):
     def _set_editor_enabled(self, enabled: bool) -> None:
         self.tabs.setEnabled(enabled)
         self.save_button.setEnabled(enabled)
+        self.save_all_button.setEnabled(enabled)
         self.reload_button.setEnabled(enabled)
         self.open_button.setEnabled(enabled)
         self.remove_profile_button.setEnabled(enabled)
