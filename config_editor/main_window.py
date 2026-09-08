@@ -14,10 +14,12 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -32,7 +34,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .storage import LoadedProfile, Profile, SettingsError, default_profiles, load_settings, save_settings
+from .storage import (
+    LoadedProfile,
+    Profile,
+    SettingsError,
+    load_profile_registry,
+    load_settings,
+    new_profile,
+    save_profile_registry,
+    save_settings,
+)
 
 
 DEFAULT_BAR = "#4A9EFF"
@@ -131,7 +142,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Usage Monitor Config Editor")
         self.resize(980, 680)
 
-        self.profiles: list[Profile] = default_profiles()
+        self.profiles: list[Profile] = load_profile_registry()
         self.loaded: dict[str, LoadedProfile] = {}
         self.modified: set[str] = set()
         self.current_key: str | None = None
@@ -142,6 +153,8 @@ class MainWindow(QMainWindow):
         self._load_profiles()
         if self.profiles:
             self.profile_list.setCurrentRow(0)
+        else:
+            self._clear_editor()
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -159,6 +172,14 @@ class MainWindow(QMainWindow):
         self.profile_list = QListWidget()
         self.profile_list.currentItemChanged.connect(self._profile_changed)
         left_layout.addWidget(self.profile_list, 1)
+        profile_actions = QHBoxLayout()
+        self.add_profile_button = QPushButton("Aggiungi profilo")
+        self.remove_profile_button = QPushButton("Rimuovi")
+        self.add_profile_button.clicked.connect(self._add_profile)
+        self.remove_profile_button.clicked.connect(self._remove_profile)
+        profile_actions.addWidget(self.add_profile_button)
+        profile_actions.addWidget(self.remove_profile_button)
+        left_layout.addLayout(profile_actions)
         self.path_label = QLabel()
         self.path_label.setWordWrap(True)
         self.path_label.setStyleSheet("color: #777777;")
@@ -275,6 +296,7 @@ class MainWindow(QMainWindow):
 
     def _load_profiles(self) -> None:
         self.profile_list.clear()
+        self.loaded.clear()
         for profile in self.profiles:
             loaded = load_settings(profile)
             self.loaded[profile.key] = loaded
@@ -282,6 +304,95 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, profile.key)
             self.profile_list.addItem(item)
             self._refresh_item(item, loaded)
+
+    def _set_editor_enabled(self, enabled: bool) -> None:
+        self.tabs.setEnabled(enabled)
+        self.save_button.setEnabled(enabled)
+        self.reload_button.setEnabled(enabled)
+        self.open_button.setEnabled(enabled)
+        self.remove_profile_button.setEnabled(enabled)
+
+    def _clear_editor(self) -> None:
+        self.current_key = None
+        self.profile_title.setText("Nessun profilo selezionato")
+        self.path_label.setText("Aggiungi un file JSON per iniziare.")
+        self.status_label.setText("Nessun profilo caricato")
+        self._set_editor_enabled(False)
+
+    def _add_profile(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Seleziona un file di configurazione",
+            str(Path.home()),
+            "File JSON (*.json);;Tutti i file (*)",
+        )
+        if not selected:
+            return
+
+        path = Path(selected).resolve()
+        if any(existing.path.resolve() == path for existing in self.profiles):
+            QMessageBox.information(self, "Profilo già presente", "Questo file è già nell'elenco dei profili.")
+            return
+
+        default_label = path.parent.name.lstrip(".").replace("-", " ").replace("_", " ").title()
+        label, accepted = QInputDialog.getText(
+            self,
+            "Nome profilo",
+            "Nome da mostrare nell'elenco:",
+            text=default_label or path.stem,
+        )
+        if not accepted or not label.strip():
+            return
+
+        profile = new_profile(label.strip(), path)
+        try:
+            save_profile_registry(self.profiles + [profile])
+        except OSError as exc:
+            QMessageBox.critical(self, "Profilo non aggiunto", str(exc))
+            return
+
+        self.profiles.append(profile)
+        loaded = load_settings(profile)
+        self.loaded[profile.key] = loaded
+        item = QListWidgetItem(profile.label)
+        item.setData(Qt.UserRole, profile.key)
+        self.profile_list.addItem(item)
+        self._refresh_item(item, loaded)
+        self.profile_list.setCurrentItem(item)
+
+    def _remove_profile(self) -> None:
+        if not self.current_key:
+            return
+        profile = self.loaded[self.current_key].profile
+        answer = QMessageBox.question(
+            self,
+            "Rimuovi profilo",
+            f"Rimuovere '{profile.label}' dall'elenco?\n\nIl file non verrà cancellato.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        remaining = [item for item in self.profiles if item.key != self.current_key]
+        try:
+            save_profile_registry(remaining)
+        except OSError as exc:
+            QMessageBox.critical(self, "Profilo non rimosso", str(exc))
+            return
+
+        row = self.profile_list.currentRow()
+        self.profiles = remaining
+        self.modified.discard(self.current_key)
+        self.loaded.pop(self.current_key, None)
+        self.current_key = None
+        self.profile_list.blockSignals(True)
+        self.profile_list.takeItem(row)
+        self.profile_list.blockSignals(False)
+        if self.profile_list.count():
+            self.profile_list.setCurrentRow(min(row, self.profile_list.count() - 1))
+        else:
+            self._clear_editor()
 
     def _refresh_item(self, item: QListWidgetItem, loaded: LoadedProfile) -> None:
         if loaded.error:
@@ -299,9 +410,11 @@ class MainWindow(QMainWindow):
         if previous is not None:
             self._capture_editor()
         if current is None:
+            self._clear_editor()
             return
         self.current_key = current.data(Qt.UserRole)
         loaded = self.loaded[self.current_key]
+        self._set_editor_enabled(True)
         self.profile_title.setText(loaded.profile.label)
         self.path_label.setText(str(loaded.profile.path))
         self.path_label.setToolTip(str(loaded.profile.path))

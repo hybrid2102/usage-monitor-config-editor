@@ -5,17 +5,24 @@ the Usage Monitor family of applications.
 
 ## Current scope
 
-The first version manages these profiles automatically:
+The application starts with an empty profile list. Use **Aggiungi profilo** to
+select any JSON configuration file and give it a display name. The selected
+list is remembered between runs in:
 
-- `%USERPROFILE%\.claude\usage-monitor-settings.json`
-- `%USERPROFILE%\.claude-valeria\usage-monitor-settings.json`
-- `%USERPROFILE%\.codex\usage-monitor-settings.json`
-- `%USERPROFILE%\.copilot\usage-monitor-settings.json`
+```text
+%LOCALAPPDATA%\UsageMonitorConfigEditor\profiles.json
+```
+
+Removing a profile only removes it from this list; the original JSON file is
+never deleted. This makes it possible to manage the Claude, Claude Valeria,
+Codex and Copilot files, as well as additional profiles, without changing the
+application code.
 
 It provides:
 
 - Visual color editing for the popup bar and tray icon themes.
 - Quick action command editing and an explicit test button.
+- Selectable profile list with persistent local history.
 - Read-only JSON preview that preserves settings the editor does not manage.
 - Atomic saves and a `.bak` backup of the previous file.
 - Support for profiles that do not exist yet.
@@ -42,4 +49,3 @@ The executable is created at `dist\UsageMonitorConfigEditor.exe`.
 The editor does not start, stop or restart the monitor automatically. After
 saving, restart the relevant monitor instance from its tray menu. The test
 button asks for confirmation because quick action values are shell commands.
-
