@@ -14,6 +14,8 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -45,6 +47,7 @@ from .storage import (
     save_profile_registry,
     save_settings,
 )
+from . import __version__
 
 
 DEFAULT_BAR = "#4A9EFF"
@@ -56,6 +59,7 @@ KNOWN_PROFILE_LABELS = {
     ".codex": "Codex",
     ".copilot": "Copilot",
 }
+REPOSITORY_URL = "https://github.com/hybrid2102/usage-monitor-config-editor"
 
 
 def color_from_rgba(value: Any, fallback: str) -> str:
@@ -169,6 +173,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
 
+        help_menu = self.menuBar().addMenu("Aiuto")
+        about_action = help_menu.addAction("Informazioni")
+        about_action.triggered.connect(self._show_about)
+
         splitter = QSplitter(Qt.Horizontal)
         outer.addWidget(splitter, 1)
 
@@ -231,6 +239,41 @@ class MainWindow(QMainWindow):
         right_layout.addLayout(action_row)
         splitter.addWidget(right)
         splitter.setSizes([245, 735])
+
+    def _show_about(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Informazioni")
+        dialog.setMinimumWidth(390)
+        layout = QVBoxLayout(dialog)
+
+        title = QLabel("Usage Monitor Config Editor")
+        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        layout.addWidget(title)
+
+        version = QLabel(f"Versione {__version__}")
+        version.setStyleSheet("color: #666666;")
+        layout.addWidget(version)
+
+        description = QLabel(
+            "Editor visuale per gestire i file usage-monitor-settings.json "
+            "di più profili AI."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        details = QLabel("Licenza MIT\nSviluppato per Windows con Python e PySide6")
+        details.setStyleSheet("color: #666666;")
+        layout.addWidget(details)
+
+        repository = QLabel(f'<a href="{REPOSITORY_URL}">Repository GitHub</a>')
+        repository.setOpenExternalLinks(True)
+        layout.addWidget(repository)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _build_colors_tab(self) -> QWidget:
         tab = QWidget()
