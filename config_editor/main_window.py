@@ -14,6 +14,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -53,6 +54,17 @@ from . import __version__
 DEFAULT_BAR = "#4A9EFF"
 DEFAULT_LIGHT = "#FFFFFF"
 DEFAULT_DARK = "#000000"
+BRAND_PRESETS = (
+    ("Claude", "#D97757"),
+    ("ChatGPT", "#FFFFFF"),
+    ("Codex", "#10A37F"),
+    ("Copilot", "#8B5CF6"),
+    ("Gemini", "#4285F4"),
+    ("Perplexity", "#20B2AA"),
+    ("Grok", "#000000"),
+    ("DeepSeek", "#4D6BFE"),
+    ("Mistral", "#FF7000"),
+)
 KNOWN_PROFILE_LABELS = {
     ".claude": "Claude",
     ".claude-valeria": "Claude Valeria",
@@ -82,6 +94,49 @@ def normalize_hex(value: str) -> str:
     if not color.isValid() or not value.strip().startswith("#") or len(value.strip()) not in (4, 7):
         raise ValueError("Usa un colore esadecimale come #D97757.")
     return color.name(QColor.HexRgb).upper()
+
+
+def blend_hex(first: str, second: str, second_ratio: float) -> str:
+    """Blend two hex colors by the given amount of the second color."""
+    if not 0 <= second_ratio <= 1:
+        raise ValueError("Il rapporto di fusione deve essere compreso tra 0 e 1.")
+    first_color = QColor(normalize_hex(first))
+    second_color = QColor(normalize_hex(second))
+    ratio = second_ratio
+    channels = [
+        round(first_channel * (1 - ratio) + second_channel * ratio)
+        for first_channel, second_channel in zip(
+            (first_color.red(), first_color.green(), first_color.blue()),
+            (second_color.red(), second_color.green(), second_color.blue()),
+        )
+    ]
+    return "#{:02X}{:02X}{:02X}".format(*channels)
+
+
+def palette_from_primary(primary: str) -> dict[str, str]:
+    """Generate the bar and readable light/dark icon colors from one color."""
+    primary = normalize_hex(primary)
+    return {
+        "bar": primary,
+        "light": blend_hex(primary, DEFAULT_LIGHT, 0.65),
+        "dark": blend_hex(primary, DEFAULT_DARK, 0.65),
+    }
+
+
+def brand_preset_for_profile(label: str) -> tuple[str, str] | None:
+    """Return the most recognizable brand preset for a profile label."""
+    normalized = label.casefold()
+    for brand, color in BRAND_PRESETS:
+        if brand.casefold() in normalized:
+            return brand, color
+    return None
+
+
+def readable_text_color(background: str) -> str:
+    """Return a readable text color for a solid-color preview background."""
+    color = QColor(normalize_hex(background))
+    luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+    return "#111111" if luminance > 150 else "#FFFFFF"
 
 
 class ColorButton(QPushButton):
@@ -288,14 +343,36 @@ class MainWindow(QMainWindow):
 
         form_box = QGroupBox("Colori principali")
         form = QFormLayout(form_box)
+        self.primary_color = ColorButton(DEFAULT_BAR)
         self.bar_color = ColorButton(DEFAULT_BAR)
         self.light_color = ColorButton(DEFAULT_LIGHT)
         self.dark_color = ColorButton(DEFAULT_DARK)
+        self.primary_color.colorChanged.connect(self._apply_primary_color)
+        self.bar_color.colorChanged.connect(self._sync_primary_from_bar)
         for button in (self.bar_color, self.light_color, self.dark_color):
             button.colorChanged.connect(self._mark_dirty)
+        form.addRow("Colore principale", self.primary_color)
+
+        preset_row = QHBoxLayout()
+        self.brand_preset = QComboBox()
+        for brand, color in BRAND_PRESETS:
+            self.brand_preset.addItem(f"{brand} ({color})", color)
+        self.brand_preset.addItem("Personalizzato", None)
+        self.apply_brand_button = QPushButton("Applica")
+        self.apply_brand_button.clicked.connect(self._apply_brand_preset)
+        preset_row.addWidget(self.brand_preset, 1)
+        preset_row.addWidget(self.apply_brand_button)
+        form.addRow("Preset brand", preset_row)
         form.addRow("Barra di utilizzo", self.bar_color)
         form.addRow("Icona taskbar scura", self.light_color)
         form.addRow("Icona taskbar chiara", self.dark_color)
+        hint = QLabel(
+            "Scegliendo il colore principale vengono generate automaticamente "
+            "la barra e le due varianti dell'icona. Puoi poi rifinirle singolarmente."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666666;")
+        form.addRow("Nota", hint)
         layout.addWidget(form_box)
 
         preview_box = QGroupBox("Anteprima")
@@ -543,13 +620,16 @@ class MainWindow(QMainWindow):
         self.profile_title.setText(loaded.profile.label)
         self.path_label.setText(str(loaded.profile.path))
         self.path_label.setToolTip(str(loaded.profile.path))
+        self._select_recommended_brand(loaded.profile.label)
         self._populate_editor(loaded.data)
         self.status_label.setText(loaded.error or ("File presente" if loaded.exists else "File non ancora creato"))
 
     def _populate_editor(self, data: dict[str, Any]) -> None:
         self._loading = True
         try:
-            self.bar_color.set_color(data.get("bar_fg", DEFAULT_BAR))
+            bar_color = data.get("bar_fg", DEFAULT_BAR)
+            self.primary_color.set_color(bar_color)
+            self.bar_color.set_color(bar_color)
             light = data.get("icon_light", {})
             dark = data.get("icon_dark", {})
             self.light_color.set_color(color_from_rgba(light.get("fg"), DEFAULT_LIGHT))
@@ -566,6 +646,43 @@ class MainWindow(QMainWindow):
 
         self._refresh_preview()
         self.json_view.setPlainText(json.dumps(data, ensure_ascii=False, indent=2))
+
+    def _apply_primary_color(self, color: str) -> None:
+        """Apply the generated palette when the main color is selected."""
+        if self._loading:
+            return
+        if self.brand_preset.currentData() != color:
+            self.brand_preset.setCurrentIndex(self.brand_preset.count() - 1)
+        palette = palette_from_primary(color)
+        self.bar_color.set_color(palette["bar"])
+        self.light_color.set_color(palette["light"])
+        self.dark_color.set_color(palette["dark"])
+        self._mark_dirty()
+
+    def _apply_brand_preset(self) -> None:
+        """Use the selected brand color as the main color and generate its palette."""
+        color = self.brand_preset.currentData()
+        if not isinstance(color, str):
+            return
+        self.primary_color.set_color(color)
+        self._apply_primary_color(color)
+
+    def _select_recommended_brand(self, profile_label: str) -> None:
+        """Select the brand associated with the active profile without applying it."""
+        recommended = brand_preset_for_profile(profile_label)
+        if recommended is None:
+            self.brand_preset.setCurrentIndex(self.brand_preset.count() - 1)
+            return
+        _, color = recommended
+        index = self.brand_preset.findData(color)
+        self.brand_preset.setCurrentIndex(index if index >= 0 else self.brand_preset.count() - 1)
+
+    def _sync_primary_from_bar(self, color: str) -> None:
+        """Keep the main-color swatch representative after a manual bar edit."""
+        if not self._loading:
+            self.primary_color.set_color(color)
+            if self.brand_preset.currentData() != color:
+                self.brand_preset.setCurrentIndex(self.brand_preset.count() - 1)
 
     def _capture_editor(self) -> None:
         if not self.current_key or self.current_key not in self.loaded:
@@ -611,7 +728,9 @@ class MainWindow(QMainWindow):
     def _refresh_preview(self) -> None:
         self.preview_light.set_color(self.light_color.color, "#202020")
         self.preview_dark.set_color(self.dark_color.color, "#F2F2F2")
-        self.preview_bar.set_color("#FFFFFF", self.bar_color.color)
+        self.preview_bar.set_color(
+            readable_text_color(self.bar_color.color), self.bar_color.color
+        )
 
     def _save_current(self) -> bool:
         if not self.current_key:

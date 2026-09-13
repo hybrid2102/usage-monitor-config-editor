@@ -21,6 +21,8 @@ application code.
 It provides:
 
 - Visual color editing for the popup bar and tray icon themes.
+- Main-color presets based on familiar AI brand colors (Claude, ChatGPT, Codex,
+  Copilot and others), generating a matching bar color plus light and dark icon variants.
 - Quick action command editing and an explicit test button.
 - Selectable profile list with persistent local history.
 - Automatic discovery of `usage-monitor-settings.json` files in standard user
